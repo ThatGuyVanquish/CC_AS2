@@ -152,7 +152,10 @@ module Reader : READER = struct
     let nt1 = pack nt1
                 (fun (num, den) ->
                   let d = gcd num den in
-                  ScmRational(num / d, den / d)) in
+                  if (d > 0)
+                    then ScmRational(num / d, den / d)
+                    else ScmRational(-num / (d), den / (-d)))
+              in  
     nt1 str
   and nt_integer_part str =
     let nt1 = plus nt_digit in
@@ -244,12 +247,12 @@ module Reader : READER = struct
   and nt_char_named str = 
     let nt1 = 
       disj_list [
-      pack (word "newline") (fun _ -> '\n');
-      pack (word "return") (fun _ -> '\r');
-      pack (word "page") (fun _ -> '\012');
-      pack (word "tab") (fun _ -> '\t');
-      pack (word "nul") (fun _ -> '0');
-      pack (word "space") (fun _ -> ' ')] in
+      pack (word_ci "newline") (fun _ -> '\n');
+      pack (word_ci "return") (fun _ -> '\r');
+      pack (word_ci "page") (fun _ -> '\012');
+      pack (word_ci "tab") (fun _ -> '\t');
+      pack (word_ci "nul") (fun _ -> '\000');
+      pack (word_ci "space") (fun _ -> ' ')] in
       nt1 str
   and nt_char_hex str =
     let nt1 = caten (char_ci 'x') nt_hex_nat in
@@ -506,7 +509,7 @@ module type TAG_PARSER = sig
   val sprint_exprs : 'a -> expr list -> string    
 end;;
 
-module Tag_Parser : TAG_PARSER = struct
+module Tag_Parser (*: TAG_PARSER*) = struct
   open Reader;;
   
   let reserved_word_list =
@@ -573,14 +576,17 @@ module Tag_Parser : TAG_PARSER = struct
     | sexpr -> sexpr;;
 
   let rec macro_expand_and_clauses expr = function
-    | [] -> raise X_not_yet_implemented
-    | expr' :: exprs -> raise X_not_yet_implemented;;
+    | [] -> expr 
+    | expr' :: exprs -> 
+      ScmPair(ScmSymbol "if", 
+        ScmPair (expr, ScmPair (macro_expand_and_clauses expr' exprs,
+                                ScmPair (ScmBoolean false, ScmNil))))
 
   let rec macro_expand_cond_ribs ribs =
     match ribs with
-    | ScmNil -> raise X_not_yet_implemented
+    | ScmNil -> raise (X_syntax "cond ribs can't be null")
     | ScmPair (ScmPair (ScmSymbol "else", exprs), ribs) ->
-       raise X_not_yet_implemented
+      ScmPair (ScmSymbol "begin", exprs)
     | ScmPair (ScmPair (expr,
                         ScmPair (ScmSymbol "=>",
                                  ScmPair (func, ScmNil))),
@@ -628,12 +634,50 @@ module Tag_Parser : TAG_PARSER = struct
                             ScmPair (remaining, ScmNil))))
     | _ -> raise (X_syntax "malformed cond-rib");;
 
+let nil_less_scheme_list_to_ocaml lst =
+  match (scheme_list_to_ocaml lst) with
+    | (vs, ScmNil) -> vs
+    | _ -> raise (X_this_should_not_happen "There's always a Neil (deGrasse Tyson)");;
+
+  let macro_expand_let vars exprs =
+    let var_list = nil_less_scheme_list_to_ocaml vars in
+    let var_list = List.map nil_less_scheme_list_to_ocaml var_list in
+    let ps = List.map (fun [var ; arg] -> var) var_list in
+    let args = List.map(fun [var ; arg] -> arg) var_list in
+    ScmPair (ScmPair (ScmSymbol "lambda",
+       ScmPair (scheme_sexpr_list_of_sexpr_list ps, exprs)),
+      scheme_sexpr_list_of_sexpr_list args);;
+      
+  let macro_expand_let_star var arg ribs exprs =
+    ScmPair
+    (ScmSymbol "let",
+     ScmPair
+      (ScmPair
+        (ScmPair (var, ScmPair (arg, ScmNil)), ScmNil),
+       ScmPair
+        (ScmPair
+          (ScmSymbol "let*",
+           ScmPair (ribs, exprs)),
+         ScmNil)))
+  
+  let macro_expand_letrec ribs exprs = 
+    let val_list = nil_less_scheme_list_to_ocaml ribs in
+      let ocaml_val_list = List.map nil_less_scheme_list_to_ocaml val_list in
+      let new_ribs = List.map (fun lst-> scheme_sexpr_list_of_sexpr_list [List.hd lst ; ScmSymbol "Moshe!"]) ocaml_val_list in
+      let new_ribs = scheme_sexpr_list_of_sexpr_list new_ribs in
+      let ocaml_ribs = nil_less_scheme_list_to_ocaml ribs in
+      let setters = List.map(fun rib -> scheme_sexpr_list_of_sexpr_list [ScmSymbol "set!" ; rib]) ocaml_ribs in
+      let ocaml_exprs = nil_less_scheme_list_to_ocaml exprs in
+      let new_exprs = List.append setters ocaml_exprs in
+      let new_exprs = scheme_sexpr_list_of_sexpr_list new_exprs in
+    ScmPair(ScmSymbol "let", ScmPair(new_ribs, new_exprs))
+
   let rec tag_parse sexpr =
     match sexpr with
     | ScmVoid | ScmBoolean _ | ScmChar _ | ScmString _ | ScmNumber _ ->
        ScmConst sexpr
     | ScmPair (ScmSymbol "quote", ScmPair (sexpr, ScmNil)) ->
-       raise X_not_yet_implemented
+       ScmConst sexpr 
     | ScmPair (ScmSymbol "quasiquote", ScmPair (sexpr, ScmNil)) ->
        tag_parse (macro_expand_qq sexpr)
     | ScmSymbol var ->
@@ -657,7 +701,7 @@ module Tag_Parser : TAG_PARSER = struct
        (match (scheme_list_to_ocaml sexprs) with
         | (sexprs', ScmNil) -> ScmSeq(List.map tag_parse sexprs')
         | _ -> raise (X_syntax "Improper sequence"))
-    | ScmPair (ScmSymbol "set!",
+    | ScmPair (ScmSymbol "set!", 
                ScmPair (ScmSymbol var,
                         ScmPair (expr, ScmNil))) ->
        if (is_reserved_word var)
@@ -684,22 +728,28 @@ module Tag_Parser : TAG_PARSER = struct
            ScmLambda(unsymbolify_vars params, Opt opt, expr)
         | _ -> raise (X_syntax "invalid parameter list"))
     | ScmPair (ScmSymbol "let", ScmPair (ribs, exprs)) ->
-       raise X_not_yet_implemented
+        tag_parse (macro_expand_let ribs exprs)
     | ScmPair (ScmSymbol "let*", ScmPair (ScmNil, exprs)) ->
-       raise X_not_yet_implemented
+        tag_parse (macro_expand_let ScmNil exprs)
     | ScmPair (ScmSymbol "let*",
                ScmPair
                  (ScmPair
                     (ScmPair (var, ScmPair (value, ScmNil)), ScmNil),
-                  exprs)) -> raise X_not_yet_implemented
+                  exprs)) -> 
+                    tag_parse (macro_expand_let 
+                    (scheme_sexpr_list_of_sexpr_list
+                      [(scheme_sexpr_list_of_sexpr_list [var ; value])]) exprs)
     | ScmPair (ScmSymbol "let*",
                ScmPair (ScmPair (ScmPair (var,
                                           ScmPair (arg, ScmNil)),
                                  ribs),
-                        exprs)) -> raise X_not_yet_implemented
+                        exprs)) -> 
+                          tag_parse(macro_expand_let_star var arg ribs exprs)
+                        
     | ScmPair (ScmSymbol "letrec", ScmPair (ribs, exprs)) ->
-       raise X_not_yet_implemented
-    | ScmPair (ScmSymbol "and", ScmNil) -> raise X_not_yet_implemented
+      tag_parse (macro_expand_letrec ribs exprs)
+
+    | ScmPair (ScmSymbol "and", ScmNil) -> ScmConst(ScmBoolean true)
     | ScmPair (ScmSymbol "and", exprs) ->
        (match (scheme_list_to_ocaml exprs) with
         | expr :: exprs, ScmNil ->
@@ -724,102 +774,101 @@ module Tag_Parser : TAG_PARSER = struct
                           "Unknown form: \n%a\n"
                           Reader.sprint_sexpr sexpr));;
 
-  let rec sexpr_of_expr = function
+    let rec sexpr_of_expr = function
     | ScmConst(ScmVoid) -> ScmVoid
     | ScmConst((ScmBoolean _) as sexpr) -> sexpr
     | ScmConst((ScmChar _) as sexpr) -> sexpr
     | ScmConst((ScmString _) as sexpr) -> sexpr
     | ScmConst((ScmNumber _) as sexpr) -> sexpr
-    | ScmConst((ScmSymbol _) as sexpr) ->
-       ScmPair (ScmSymbol "quote", ScmPair (sexpr, ScmNil))
-    | ScmConst(ScmNil as sexpr) ->
-       ScmPair (ScmSymbol "quote", ScmPair (sexpr, ScmNil))
-    | ScmConst((ScmVector _) as sexpr) ->
-       ScmPair (ScmSymbol "quote", ScmPair (sexpr, ScmNil))  
+    | ScmConst((ScmSymbol _) as sexpr)
+      | ScmConst(ScmNil as sexpr)
+      | ScmConst(ScmPair _ as sexpr)
+      | ScmConst((ScmVector _) as sexpr) ->
+        ScmPair (ScmSymbol "quote", ScmPair (sexpr, ScmNil))
     | ScmVarGet(Var var) -> ScmSymbol var
     | ScmIf(test, dit, ScmConst ScmVoid) ->
-       let test = sexpr_of_expr test in
-       let dit = sexpr_of_expr dit in
-       ScmPair (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmNil)))
+        let test = sexpr_of_expr test in
+        let dit = sexpr_of_expr dit in
+        ScmPair (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmNil)))
     | ScmIf(e1, e2, ScmConst (ScmBoolean false)) ->
-       let e1 = sexpr_of_expr e1 in
-       (match (sexpr_of_expr e2) with
+        let e1 = sexpr_of_expr e1 in
+        (match (sexpr_of_expr e2) with
         | ScmPair (ScmSymbol "and", exprs) ->
-           ScmPair (ScmSymbol "and", ScmPair(e1, exprs))
+            ScmPair (ScmSymbol "and", ScmPair(e1, exprs))
         | e2 -> ScmPair (ScmSymbol "and", ScmPair (e1, ScmPair (e2, ScmNil))))
     | ScmIf(test, dit, dif) ->
-       let test = sexpr_of_expr test in
-       let dit = sexpr_of_expr dit in
-       let dif = sexpr_of_expr dif in
-       ScmPair
-         (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmPair (dif, ScmNil))))
+        let test = sexpr_of_expr test in
+        let dit = sexpr_of_expr dit in
+        let dif = sexpr_of_expr dif in
+        ScmPair
+          (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmPair (dif, ScmNil))))
     | ScmSeq([]) -> ScmVoid
     | ScmSeq([expr]) -> sexpr_of_expr expr
     | ScmSeq(exprs) ->
-       ScmPair(ScmSymbol "begin", 
-               scheme_sexpr_list_of_sexpr_list
-                 (List.map sexpr_of_expr exprs))
+        ScmPair(ScmSymbol "begin", 
+                scheme_sexpr_list_of_sexpr_list
+                  (List.map sexpr_of_expr exprs))
     | ScmVarSet(Var var, expr) ->
-       let var = ScmSymbol var in
-       let expr = sexpr_of_expr expr in
-       ScmPair (ScmSymbol "set!", ScmPair (var, ScmPair (expr, ScmNil)))
+        let var = ScmSymbol var in
+        let expr = sexpr_of_expr expr in
+        ScmPair (ScmSymbol "set!", ScmPair (var, ScmPair (expr, ScmNil)))
     | ScmVarDef(Var var, expr) ->
-       let var = ScmSymbol var in
-       let expr = sexpr_of_expr expr in
-       ScmPair (ScmSymbol "define", ScmPair (var, ScmPair (expr, ScmNil)))
+        let var = ScmSymbol var in
+        let expr = sexpr_of_expr expr in
+        ScmPair (ScmSymbol "define", ScmPair (var, ScmPair (expr, ScmNil)))
     | ScmLambda(params, Simple, expr) ->
-       let params = scheme_sexpr_list_of_sexpr_list
+        let params = scheme_sexpr_list_of_sexpr_list
                       (List.map (fun str -> ScmSymbol str) params) in
-       let expr = sexpr_of_expr expr in
-       ScmPair (ScmSymbol "lambda",
+        let expr = sexpr_of_expr expr in
+        ScmPair (ScmSymbol "lambda",
                 ScmPair (params,
-                         ScmPair (expr, ScmNil)))
+                          ScmPair (expr, ScmNil)))
     | ScmLambda([], Opt opt, expr) ->
-       let expr = sexpr_of_expr expr in
-       let opt = ScmSymbol opt in
-       ScmPair
-         (ScmSymbol "lambda",
+        let expr = sexpr_of_expr expr in
+        let opt = ScmSymbol opt in
+        ScmPair
+          (ScmSymbol "lambda",
           ScmPair (opt, ScmPair (expr, ScmNil)))
     | ScmLambda(params, Opt opt, expr) ->
-       let expr = sexpr_of_expr expr in
-       let opt = ScmSymbol opt in
-       let params = List.fold_right
+        let expr = sexpr_of_expr expr in
+        let opt = ScmSymbol opt in
+        let params = List.fold_right
                       (fun param sexpr -> ScmPair(ScmSymbol param, sexpr))
                       params
                       opt in
-       ScmPair
-         (ScmSymbol "lambda", ScmPair (params, ScmPair (expr, ScmNil)))
+        ScmPair
+          (ScmSymbol "lambda", ScmPair (params, ScmPair (expr, ScmNil)))
     | ScmApplic (ScmLambda (params, Simple, expr), args) ->
-       let ribs =
-         scheme_sexpr_list_of_sexpr_list
-           (List.map2
+        let ribs =
+          scheme_sexpr_list_of_sexpr_list
+            (List.map2
               (fun param arg -> ScmPair (ScmSymbol param, ScmPair (arg, ScmNil)))
               params
               (List.map sexpr_of_expr args)) in
-       let expr = sexpr_of_expr expr in
-       ScmPair
-         (ScmSymbol "let",
+        let expr = sexpr_of_expr expr in
+        ScmPair
+          (ScmSymbol "let",
           ScmPair (ribs,
-                   ScmPair (expr, ScmNil)))
+                    ScmPair (expr, ScmNil)))
     | ScmApplic (proc, args) ->
-       let proc = sexpr_of_expr proc in
-       let args =
-         scheme_sexpr_list_of_sexpr_list
-           (List.map sexpr_of_expr args) in
-       ScmPair (proc, args)
+        let proc = sexpr_of_expr proc in
+        let args =
+          scheme_sexpr_list_of_sexpr_list
+            (List.map sexpr_of_expr args) in
+        ScmPair (proc, args)
     | _ -> raise (X_syntax "Unknown form");;
 
-  let string_of_expr expr =
+    let string_of_expr expr =
     Printf.sprintf "%a" sprint_sexpr (sexpr_of_expr expr);;
 
-  let print_expr chan expr =
+    let print_expr chan expr =
     output_string chan
       (string_of_expr expr);;
 
-  let print_exprs chan exprs =
+    let print_exprs chan exprs =
     output_string chan
       (Printf.sprintf "[%s]"
-         (String.concat "; "
+          (String.concat "; "
             (List.map string_of_expr exprs)));;
 
   let sprint_expr _ expr = string_of_expr expr;;
