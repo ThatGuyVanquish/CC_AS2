@@ -943,16 +943,30 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
   let annotate_lexical_address =
     let rec run expr params env =
       match expr with
-      | ScmConst sexpr -> raise X_not_yet_implemented
-      | ScmVarGet (Var str) -> raise X_not_yet_implemented
-      | ScmIf (test, dit, dif) -> raise X_not_yet_implemented
-      | ScmSeq exprs -> raise X_not_yet_implemented
-      | ScmOr exprs -> raise X_not_yet_implemented
-      | ScmVarSet(Var v, expr) -> raise X_not_yet_implemented
+      | ScmConst sexpr -> ScmConst' sexpr
+      | ScmVarGet (Var str) -> ScmVarGet' (tag_lexical_address_for_var str params env)
+      | ScmIf (test, dit, dif) -> 
+        ScmIf'(
+          run test params env,
+          run dit params env,
+          run dif params env
+        )
+      | ScmSeq exprs -> 
+        ScmSeq' (List.map (fun expr -> run expr params env) exprs)
+      | ScmOr exprs -> 
+        ScmOr' (List.map (fun expr -> run expr params env) exprs)
+      | ScmVarSet(Var v, expr) -> 
+        ScmVarSet' (tag_lexical_address_for_var v params env, run expr params env)
       (* this code does not [yet?] support nested define-expressions *)
-      | ScmVarDef(Var v, expr) -> raise X_not_yet_implemented
-      | ScmLambda (params', Simple, expr) -> raise X_not_yet_implemented
-      | ScmLambda (params', Opt opt, expr) -> raise X_not_yet_implemented
+      | ScmVarDef(Var v, expr) ->
+        ScmVarDef' (Var' (v, Free), run expr params env)
+      | ScmLambda (params', Simple, expr) -> 
+        let new_env = params :: env in
+        ScmLambda' (params', Simple, run expr params' new_env)
+      | ScmLambda (params', Opt opt, expr) -> 
+        let new_env = params :: env in
+        let params'_with_opt = params' @ [opt] in
+        ScmLambda' (params', Opt opt, run expr params'_with_opt new_env)
       | ScmApplic (proc, args) ->
          ScmApplic' (run proc params env,
                      List.map (fun arg -> run arg params env) args,
