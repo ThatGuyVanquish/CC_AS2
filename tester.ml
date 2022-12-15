@@ -11,9 +11,9 @@ let test_tp str expected_success expected_result =
                         if result = expected_result then
                                 ()
                         else
-                                raise (X_test_failed (Printf.sprintf "\nString: %s\nExpected: %s\nActual: %s" str expected_result result))
+                                raise (X_test_failed (Printf.sprintf "\nString: %s\nExpected: %s\nActual:   %s" str expected_result result))
                 else
-                        raise (X_test_failed (Printf.sprintf "\nString: %s\nExpected: X_syntax\nActual: %s\n" str result))
+                        raise (X_test_failed (Printf.sprintf "\nString: %s\nExpected: X_syntax\nActual:   %s\n" str result))
         with 
         | X_syntax(_) -> 
                 if expected_success then

@@ -509,7 +509,7 @@ module type TAG_PARSER = sig
   val sprint_exprs : 'a -> expr list -> string    
 end;;
 
-module Tag_Parser (*: TAG_PARSER*) = struct
+module Tag_Parser : TAG_PARSER = struct
   open Reader;;
   
   let reserved_word_list =
@@ -659,17 +659,20 @@ let nil_less_scheme_list_to_ocaml lst =
           (ScmSymbol "let*",
            ScmPair (ribs, exprs)),
          ScmNil)))
-  
+
+
   let macro_expand_letrec ribs exprs = 
     let val_list = nil_less_scheme_list_to_ocaml ribs in
-      let ocaml_val_list = List.map nil_less_scheme_list_to_ocaml val_list in
-      let new_ribs = List.map (fun lst-> scheme_sexpr_list_of_sexpr_list [List.hd lst ; ScmSymbol "Moshe!"]) ocaml_val_list in
-      let new_ribs = scheme_sexpr_list_of_sexpr_list new_ribs in
-      let ocaml_ribs = nil_less_scheme_list_to_ocaml ribs in
-      let setters = List.map(fun rib -> scheme_sexpr_list_of_sexpr_list [ScmSymbol "set!" ; rib]) ocaml_ribs in
-      let ocaml_exprs = nil_less_scheme_list_to_ocaml exprs in
-      let new_exprs = List.append setters ocaml_exprs in
-      let new_exprs = scheme_sexpr_list_of_sexpr_list new_exprs in
+    let ocaml_val_list = List.map nil_less_scheme_list_to_ocaml val_list in
+    let new_ribs = List.map (fun lst-> scheme_sexpr_list_of_sexpr_list [List.hd lst ; ScmSymbol "'whatever"]) ocaml_val_list in
+    let new_ribs = scheme_sexpr_list_of_sexpr_list new_ribs in
+    let ocaml_ribs = nil_less_scheme_list_to_ocaml ribs in
+    let ocaml_ribs = List.map nil_less_scheme_list_to_ocaml ocaml_ribs in
+    let setters = List.map(fun rib -> (ScmSymbol "set!") :: rib) ocaml_ribs in
+    let setters = List.map scheme_sexpr_list_of_sexpr_list setters in
+    let ocaml_exprs = nil_less_scheme_list_to_ocaml exprs in
+    let new_exprs = List.append setters ocaml_exprs in
+    let new_exprs = scheme_sexpr_list_of_sexpr_list new_exprs in
     ScmPair(ScmSymbol "let", ScmPair(new_ribs, new_exprs))
 
   let rec tag_parse sexpr =
@@ -983,15 +986,13 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
       | ScmIf' (test, dit, dif) -> 
           ScmIf' (run false test, run in_tail dit, run in_tail dif)
       | ScmSeq' [] -> ScmSeq' []
-      | ScmSeq' (expr :: []) -> run in_tail expr
       | ScmSeq' (expr :: exprs) -> 
-          ScmSeq' ((run false expr) :: [(run in_tail (ScmSeq' exprs))])
+          ScmSeq' (runl in_tail expr exprs)
       | ScmOr' [] -> ScmOr' []
-      | ScmOr' (expr :: []) -> run in_tail expr
       | ScmOr' (expr :: exprs) ->
           if (expr != ScmConst' (ScmBoolean false))
             then ScmOr' ([run in_tail expr])
-            else ScmOr' ((run false expr) :: [(run in_tail (ScmOr' exprs))])
+            else ScmOr' (runl in_tail expr exprs)
       | ScmVarSet' (var', expr') -> ScmVarSet' (var', run false expr')
       | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
       | (ScmBox' _) as expr' -> expr'
@@ -1013,7 +1014,7 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
       | [] -> [run in_tail expr]
       | expr' :: exprs -> (run false expr) :: (runl in_tail expr' exprs)
     in
-    fun expr' -> runl true expr';;
+    fun expr' -> run true expr';;
 
   (* auto_box *)
 
@@ -1086,7 +1087,19 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
                      List.map (fun bj -> (ai, bj)) bs')
                    as');;
 
-  let should_box_var name expr params = raise X_not_yet_implemented;;
+  let should_box_var name expr params = 
+    let (reads, writes) = find_reads_and_writes name expr params in
+    if List.length reads = 0 || List.length writes = 0
+      then false
+    else 
+      let return_majors = fun (v, env) -> (v, List.length env) in
+      let reads_majors = List.map return_majors reads in
+      let writes_majors = List.map return_majors writes in
+      let reads_x_writes = cross_product reads_majors writes_majors in
+      if (List.find_opt (fun ((read, mr), (write, mw)) -> mr != mw) reads_x_writes != None)
+        then true
+        else false
+    (* raise X_not_yet_implemented;; *)
 
   let box_sets_and_gets name body =
     let rec run expr =
@@ -1145,9 +1158,9 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
     | ScmIf' (test, dit, dif) ->
        ScmIf' (auto_box test, auto_box dit, auto_box dif)
     | ScmSeq' exprs -> ScmSeq' (List.map auto_box exprs)
-    | ScmVarSet' (v, expr) -> raise X_not_yet_implemented
-    | ScmVarDef' (v, expr) -> raise X_not_yet_implemented
-    | ScmOr' exprs -> raise X_not_yet_implemented
+    | ScmVarSet' (v, expr) -> ScmVarSet' (v, auto_box expr)
+    | ScmVarDef' (v, expr) -> ScmVarDef' (v, auto_box expr)
+    | ScmOr' exprs -> ScmOr' (List.map auto_box exprs)
     | ScmLambda' (params, Simple, expr') ->
        let box_these =
          List.filter
@@ -1166,7 +1179,22 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
          | _, _ -> ScmSeq'(new_sets @ [new_body]) in
        ScmLambda' (params, Simple, new_body)
     | ScmLambda' (params, Opt opt, expr') ->
-       raise X_not_yet_implemented
+      let box_these =
+        List.filter
+          (fun param -> should_box_var param expr' (params @ [opt]))
+          (params @ [opt]) in
+      let new_body = 
+        List.fold_left
+          (fun body name -> box_sets_and_gets name body)
+          (auto_box expr')
+          box_these in
+      let new_sets = make_sets box_these params in
+      let new_body = 
+        match box_these, new_body with
+        | [], _ -> new_body
+        | _, ScmSeq' exprs -> ScmSeq' (new_sets @ exprs)
+        | _, _ -> ScmSeq'(new_sets @ [new_body]) in
+      ScmLambda' (params, Opt opt, new_body)
     | ScmApplic' (proc, args, app_kind) ->
        ScmApplic' (auto_box proc, List.map auto_box args, app_kind);;
 
@@ -1262,7 +1290,8 @@ let rec sexpr_of_expr' = function
        Reader.scheme_sexpr_list_of_sexpr_list
          (List.map sexpr_of_expr' args) in
      ScmPair (proc, args)
-  | _ -> raise X_not_yet_implemented;;
+  | _ -> (*raise X_not_yet_implemented;;*)
+          raise (X_syntax "Unknown form");;
 
 let string_of_expr' expr =
   Printf.sprintf "%a" Reader.sprint_sexpr (sexpr_of_expr' expr);;
