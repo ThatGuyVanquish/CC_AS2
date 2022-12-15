@@ -642,7 +642,7 @@ let nil_less_scheme_list_to_ocaml lst =
   let macro_expand_let vars exprs =
     let var_list = nil_less_scheme_list_to_ocaml vars in
     let var_list = List.map nil_less_scheme_list_to_ocaml var_list in
-    let ps = List.map (fun [var ; arg] -> var) var_list in
+    let ps = List.map (fun [var ; arg]-> var) var_list in
     let args = List.map(fun [var ; arg] -> arg) var_list in
     ScmPair (ScmPair (ScmSymbol "lambda",
        ScmPair (scheme_sexpr_list_of_sexpr_list ps, exprs)),
@@ -978,20 +978,29 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
   (* run this second *)
   let annotate_tail_calls = 
     let rec run in_tail = function
-      | (ScmConst' _) as orig -> raise X_not_yet_implemented
-      | (ScmVarGet' _) as orig -> raise X_not_yet_implemented
-      | ScmIf' (test, dit, dif) -> raise X_not_yet_implemented
-      | ScmSeq' [] -> raise X_not_yet_implemented
-      | ScmSeq' (expr :: exprs) -> raise X_not_yet_implemented
-      | ScmOr' [] -> raise X_not_yet_implemented
-      | ScmOr' (expr :: exprs) -> raise X_not_yet_implemented
-      | ScmVarSet' (var', expr') -> raise X_not_yet_implemented
-      | ScmVarDef' (var', expr') -> raise X_not_yet_implemented
-      | (ScmBox' _) as expr' -> raise X_not_yet_implemented
-      | (ScmBoxGet' _) as expr' -> raise X_not_yet_implemented
-      | ScmBoxSet' (var', expr') -> raise X_not_yet_implemented
-      | ScmLambda' (params, Simple, expr) -> raise X_not_yet_implemented
-      | ScmLambda' (params, Opt opt, expr) -> raise X_not_yet_implemented
+      | (ScmConst' _) as orig -> orig
+      | (ScmVarGet' _) as orig -> orig
+      | ScmIf' (test, dit, dif) -> 
+          ScmIf' (run false test, run in_tail dit, run in_tail dif)
+      | ScmSeq' [] -> ScmSeq' []
+      | ScmSeq' (expr :: []) -> run in_tail expr
+      | ScmSeq' (expr :: exprs) -> 
+          ScmSeq' ((run false expr) :: [(run in_tail (ScmSeq' exprs))])
+      | ScmOr' [] -> ScmOr' []
+      | ScmOr' (expr :: []) -> run in_tail expr
+      | ScmOr' (expr :: exprs) ->
+          if (expr != ScmConst' (ScmBoolean false))
+            then ScmOr' ([run in_tail expr])
+            else ScmOr' ((run false expr) :: [(run in_tail (ScmOr' exprs))])
+      | ScmVarSet' (var', expr') -> ScmVarSet' (var', run false expr')
+      | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
+      | (ScmBox' _) as expr' -> expr'
+      | (ScmBoxGet' _) as expr' -> expr'
+      | ScmBoxSet' (var', expr') -> ScmBoxSet' (var', run false expr')
+      | ScmLambda' (params, Simple, expr') -> 
+          ScmLambda' (params, Simple, run in_tail expr')
+      | ScmLambda' (params, Opt opt, expr) ->
+          ScmLambda' (params, Opt opt, run in_tail expr)
       | ScmApplic' (proc, args, app_kind) ->
          if in_tail
          then ScmApplic' (run false proc,
@@ -1004,7 +1013,7 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
       | [] -> [run in_tail expr]
       | expr' :: exprs -> (run false expr) :: (runl in_tail expr' exprs)
     in
-    fun expr' -> raise X_not_yet_implemented;;
+    fun expr' -> runl true expr';;
 
   (* auto_box *)
 
