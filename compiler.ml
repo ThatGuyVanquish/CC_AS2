@@ -642,8 +642,13 @@ let nil_less_scheme_list_to_ocaml lst =
   let macro_expand_let vars exprs =
     let var_list = nil_less_scheme_list_to_ocaml vars in
     let var_list = List.map nil_less_scheme_list_to_ocaml var_list in
-    let ps = List.map (fun [var ; arg]-> var) var_list in
-    let args = List.map(fun [var ; arg] -> arg) var_list in
+    let ps = List.map (fun lst-> 
+      let var = List.hd lst in 
+      var) var_list in
+    let args = List.map(fun lst ->
+      let cdr = List.tl lst in
+      let arg = List.hd cdr in
+      arg) var_list in
     ScmPair (ScmPair (ScmSymbol "lambda",
        ScmPair (scheme_sexpr_list_of_sexpr_list ps, exprs)),
       scheme_sexpr_list_of_sexpr_list args);;
@@ -942,6 +947,14 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
         | Some(major, minor) -> Var' (name, Bound (major, minor)))
     | Some minor -> Var' (name, Param minor);;
 
+  let get_major = function
+    | None -> -1
+    | Some(major, minor) -> major;;
+
+  let get_minor = function
+    | None -> -1
+    | Some(major, minor) -> minor;;
+
   (* run this first *)
   let annotate_lexical_address =
     let rec run expr params env =
@@ -997,11 +1010,11 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
       | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
       | (ScmBox' _) as expr' -> expr'
       | (ScmBoxGet' _) as expr' -> expr'
-      | ScmBoxSet' (var', expr') -> ScmBoxSet' (var', run false expr')
+      | ScmBoxSet' (var', expr') -> ScmBoxSet' (var', expr')
       | ScmLambda' (params, Simple, expr') -> 
-          ScmLambda' (params, Simple, run in_tail expr')
+          ScmLambda' (params, Simple, run true expr')
       | ScmLambda' (params, Opt opt, expr) ->
-          ScmLambda' (params, Opt opt, run in_tail expr)
+          ScmLambda' (params, Opt opt, run true expr)
       | ScmApplic' (proc, args, app_kind) ->
          if in_tail
          then ScmApplic' (run false proc,
@@ -1013,7 +1026,7 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
     and runl in_tail expr = function
       | [] -> [run in_tail expr]
       | expr' :: exprs -> (run false expr) :: (runl in_tail expr' exprs)
-    in
+    in 
     fun expr' -> run true expr';;
 
   (* auto_box *)
@@ -1087,19 +1100,23 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
                      List.map (fun bj -> (ai, bj)) bs')
                    as');;
 
-  let should_box_var name expr params = 
-    let (reads, writes) = find_reads_and_writes name expr params in
-    if List.length reads = 0 || List.length writes = 0
-      then false
-    else 
+  (* 
       let return_majors = fun (v, env) -> (v, List.length env) in
       let reads_majors = List.map return_majors reads in
       let writes_majors = List.map return_majors writes in
       let reads_x_writes = cross_product reads_majors writes_majors in
       if (List.find_opt (fun ((read, mr), (write, mw)) -> mr != mw) reads_x_writes != None)
         then true
-        else false
-    (* raise X_not_yet_implemented;; *)
+        else false *)
+  let should_box_var name expr params = 
+    let (reads, writes) = find_reads_and_writes name expr params in 
+    if List.length reads = 0 || List.length writes = 0
+      then false
+      else true
+        (* let reads_x_writes = cross_product reads writes in 
+        let test = ormap (fun ((v1, env1), (v2, env2)) -> 
+          lookup_in_env v1 env2 = lookup_in_env v2 env1
+          ) *)
 
   let box_sets_and_gets name body =
     let rec run expr =
