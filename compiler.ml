@@ -637,7 +637,7 @@ module Tag_Parser : TAG_PARSER = struct
 let nil_less_scheme_list_to_ocaml lst =
   match (scheme_list_to_ocaml lst) with
     | (vs, ScmNil) -> vs
-    | _ -> raise (X_this_should_not_happen "There's always a Neil (deGrasse Tyson)");;
+    | _ -> raise PC.X_no_match;;
 
   let macro_expand_let vars exprs =
     let var_list = nil_less_scheme_list_to_ocaml vars in
@@ -989,15 +989,11 @@ module Semantic_Analysis (*: SEMANTIC_ANALYSIS*) = struct
       | (ScmConst' _) as orig -> orig
       | (ScmVarGet' _) as orig -> orig
       | ScmIf' (test, dit, dif) -> 
-          ScmIf' (run false test, run in_tail dit, run in_tail dif)
+          ScmIf' (test, run in_tail dit, run in_tail dif)
       | ScmSeq' [] -> ScmSeq' []
-      | ScmSeq' (expr :: exprs) -> 
-          ScmSeq' (runl in_tail expr exprs)
+      | ScmSeq' (expr :: exprs) -> ScmSeq' (runl in_tail expr exprs)
       | ScmOr' [] -> ScmOr' []
-      | ScmOr' (expr :: exprs) ->
-          if (expr != ScmConst' (ScmBoolean false))
-            then ScmOr' ([run in_tail expr])
-            else ScmOr' (runl in_tail expr exprs)
+      | ScmOr' (expr :: exprs) -> ScmOr' (runl in_tail expr exprs)
       | ScmVarSet' (var', expr') -> ScmVarSet' (var', run false expr')
       | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
       | (ScmBox' _) as expr' -> expr'
@@ -1019,7 +1015,7 @@ module Semantic_Analysis (*: SEMANTIC_ANALYSIS*) = struct
       | [] -> [run in_tail expr]
       | expr' :: exprs -> (run false expr) :: (runl in_tail expr' exprs)
     in 
-    fun expr' -> run true expr';;
+    fun expr' -> run false expr';;
 
   (* auto_box *)
 
@@ -1101,13 +1097,11 @@ module Semantic_Analysis (*: SEMANTIC_ANALYSIS*) = struct
         match ormap (fun ((v1, env1) , (v2, env2)) -> 
           let v1_name = match v1 with 
             | Var' (name, _) -> name
-            | _ -> raise (X_this_should_not_happen "v1 is a var'")
           in let v2_name = match v2 with 
           | Var' (name, _) -> name
-          | _ -> raise (X_this_should_not_happen "v2 is a var'")
           in let rib_of_v1 = List.find (fun rib -> (lookup_in_rib v1_name rib) != None) env1 in
           let rib_of_v2 = List.find (fun rib -> (lookup_in_rib v2_name rib) != None) env2 in
-          if (env1 != env2)
+          if (rib_of_v1 != rib_of_v2)
             then true
             else false
         ) reads_x_writes with
@@ -1249,6 +1243,10 @@ let rec sexpr_of_expr' = function
      let dif = sexpr_of_expr' dif in
      ScmPair
        (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmPair (dif, ScmNil))))
+  | ScmOr' (exprs) -> 
+      let args_sexprs = List.map sexpr_of_expr' exprs in
+      let scheme_args_sexprs = Reader.scheme_sexpr_list_of_sexpr_list args_sexprs in
+      ScmPair(ScmSymbol "or", scheme_args_sexprs)
   | ScmSeq' ([]) -> ScmVoid
   | ScmSeq' ([expr]) -> sexpr_of_expr' expr
   | ScmSeq' (exprs) ->
@@ -1303,8 +1301,7 @@ let rec sexpr_of_expr' = function
        Reader.scheme_sexpr_list_of_sexpr_list
          (List.map sexpr_of_expr' args) in
      ScmPair (proc, args)
-  | _ -> (*raise X_not_yet_implemented;;*)
-          raise (X_syntax "Unknown form");;
+  | _ -> raise X_not_yet_implemented;;
 
 let string_of_expr' expr =
   Printf.sprintf "%a" Reader.sprint_sexpr (sexpr_of_expr' expr);;
