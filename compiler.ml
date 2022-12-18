@@ -918,7 +918,7 @@ module type SEMANTIC_ANALYSIS = sig
   val semantics : expr -> expr'  
 end;; (* end of signature SEMANTIC_ANALYSIS *)
 
-module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
+module Semantic_Analysis (*: SEMANTIC_ANALYSIS*) = struct
 
   let rec lookup_in_rib name = function
     | [] -> None
@@ -946,14 +946,6 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
         | None -> Var' (name, Free)
         | Some(major, minor) -> Var' (name, Bound (major, minor)))
     | Some minor -> Var' (name, Param minor);;
-
-  let get_major = function
-    | None -> -1
-    | Some(major, minor) -> major;;
-
-  let get_minor = function
-    | None -> -1
-    | Some(major, minor) -> minor;;
 
   (* run this first *)
   let annotate_lexical_address =
@@ -1010,7 +1002,7 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
       | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
       | (ScmBox' _) as expr' -> expr'
       | (ScmBoxGet' _) as expr' -> expr'
-      | ScmBoxSet' (var', expr') -> ScmBoxSet' (var', expr')
+      | ScmBoxSet' (var', expr') -> ScmBoxSet' (var', run false expr')
       | ScmLambda' (params, Simple, expr') -> 
           ScmLambda' (params, Simple, run true expr')
       | ScmLambda' (params, Opt opt, expr) ->
@@ -1100,23 +1092,27 @@ module Semantic_Analysis : SEMANTIC_ANALYSIS = struct
                      List.map (fun bj -> (ai, bj)) bs')
                    as');;
 
-  (* 
-      let return_majors = fun (v, env) -> (v, List.length env) in
-      let reads_majors = List.map return_majors reads in
-      let writes_majors = List.map return_majors writes in
-      let reads_x_writes = cross_product reads_majors writes_majors in
-      if (List.find_opt (fun ((read, mr), (write, mw)) -> mr != mw) reads_x_writes != None)
-        then true
-        else false *)
   let should_box_var name expr params = 
     let (reads, writes) = find_reads_and_writes name expr params in 
     if List.length reads = 0 || List.length writes = 0
       then false
-      else true
-        (* let reads_x_writes = cross_product reads writes in 
-        let test = ormap (fun ((v1, env1), (v2, env2)) -> 
-          lookup_in_env v1 env2 = lookup_in_env v2 env1
-          ) *)
+      else 
+        let reads_x_writes = cross_product reads writes in
+        match ormap (fun ((v1, env1) , (v2, env2)) -> 
+          let v1_name = match v1 with 
+            | Var' (name, _) -> name
+            | _ -> raise (X_this_should_not_happen "v1 is a var'")
+          in let v2_name = match v2 with 
+          | Var' (name, _) -> name
+          | _ -> raise (X_this_should_not_happen "v2 is a var'")
+          in let rib_of_v1 = List.find (fun rib -> (lookup_in_rib v1_name rib) != None) env1 in
+          let rib_of_v2 = List.find (fun rib -> (lookup_in_rib v2_name rib) != None) env2 in
+          if (env1 != env2)
+            then true
+            else false
+        ) reads_x_writes with
+        | false -> false
+        | _ -> true
 
   let box_sets_and_gets name body =
     let rec run expr =
