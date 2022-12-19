@@ -810,6 +810,12 @@ let nil_less_scheme_list_to_ocaml lst =
         let dif = sexpr_of_expr dif in
         ScmPair
           (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmPair (dif, ScmNil))))
+    | ScmOr([]) -> ScmBoolean false
+    | ScmOr([expr]) -> sexpr_of_expr expr
+    | ScmOr(exprs) ->
+        ScmPair (ScmSymbol "or",
+                scheme_sexpr_list_of_sexpr_list
+                  (List.map sexpr_of_expr exprs))
     | ScmSeq([]) -> ScmVoid
     | ScmSeq([expr]) -> sexpr_of_expr expr
     | ScmSeq(exprs) ->
@@ -864,7 +870,6 @@ let nil_less_scheme_list_to_ocaml lst =
           scheme_sexpr_list_of_sexpr_list
             (List.map sexpr_of_expr args) in
         ScmPair (proc, args)
-    | _ -> raise (X_syntax "Unknown form");;
 
     let string_of_expr expr =
     Printf.sprintf "%a" sprint_sexpr (sexpr_of_expr expr);;
@@ -1243,10 +1248,12 @@ let rec sexpr_of_expr' = function
      let dif = sexpr_of_expr' dif in
      ScmPair
        (ScmSymbol "if", ScmPair (test, ScmPair (dit, ScmPair (dif, ScmNil))))
-  | ScmOr' (exprs) -> 
-      let args_sexprs = List.map sexpr_of_expr' exprs in
-      let scheme_args_sexprs = Reader.scheme_sexpr_list_of_sexpr_list args_sexprs in
-      ScmPair(ScmSymbol "or", scheme_args_sexprs)
+  | ScmOr'([]) -> ScmBoolean false
+  | ScmOr'([expr']) -> sexpr_of_expr' expr'
+  | ScmOr'(exprs) ->
+     ScmPair (ScmSymbol "or",
+              Reader.scheme_sexpr_list_of_sexpr_list
+                (List.map sexpr_of_expr' exprs))
   | ScmSeq' ([]) -> ScmVoid
   | ScmSeq' ([expr]) -> sexpr_of_expr' expr
   | ScmSeq' (exprs) ->
@@ -1301,7 +1308,8 @@ let rec sexpr_of_expr' = function
        Reader.scheme_sexpr_list_of_sexpr_list
          (List.map sexpr_of_expr' args) in
      ScmPair (proc, args)
-  | _ -> raise X_not_yet_implemented;;
+  (* for reversing macro-expansion... *)
+  | _ -> raise (X_syntax "Unknown form");;
 
 let string_of_expr' expr =
   Printf.sprintf "%a" Reader.sprint_sexpr (sexpr_of_expr' expr);;
